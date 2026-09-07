@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import subprocess
 import shutil
 from typing import List, Dict, Any, Optional
@@ -86,7 +87,94 @@ class TikTokDownloader:
             except Exception as e:
                 print(f"Audio fallback download attempt skipped: {e}")
 
+        output_path = self.normalize_for_shorts(output_path)
+
         return output_path
+
+    def _probe_dimensions(self, file_path: str) -> Optional[tuple]:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json",
+            file_path
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            streams = json.loads(result.stdout).get("streams") or []
+            if not streams:
+                return None
+            return streams[0].get("width"), streams[0].get("height")
+        except Exception as e:
+            print(f"ffprobe dimension check failed: {e}")
+            return None
+
+    def _detect_crop(self, file_path: str) -> Optional[tuple]:
+        cmd = ["ffmpeg", "-i", file_path, "-vf", "cropdetect=24:2:0", "-t", "1.5", "-f", "null", "-"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            matches = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", result.stderr)
+            if not matches:
+                return None
+            return tuple(int(v) for v in matches[-1])
+        except Exception as e:
+            print(f"ffmpeg cropdetect failed: {e}")
+            return None
+
+    def normalize_for_shorts(self, file_path: str) -> str:
+        """Ensure the downloaded video is genuinely vertical/square so YouTube
+        classifies the upload as a Short. TikTok videos are normally already
+        vertical, but some download paths can return a landscape-dimensioned
+        file (either real landscape footage, or vertical content pillarboxed
+        inside a landscape frame). YouTube's Shorts classifier looks at the
+        actual encoded pixel dimensions, not just how the video looks, so we
+        detect and fix that here rather than relying on #Shorts tags alone.
+        """
+        if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
+            print("ffprobe/ffmpeg not available; skipping Shorts orientation check.")
+            return file_path
+
+        dims = self._probe_dimensions(file_path)
+        if not dims or not dims[0] or not dims[1]:
+            return file_path
+        width, height = dims
+
+        if height >= width:
+            return file_path
+
+        print(f"Warning: downloaded video is landscape ({width}x{height}); adjusting for Shorts eligibility.")
+        working_path = file_path
+
+        crop = self._detect_crop(file_path)
+        if crop:
+            cw, ch, cx, cy = crop
+            if ch > cw and (cw, ch) != (width, height):
+                cropped_path = file_path.replace(".mp4", "_cropped.mp4")
+                cmd = ["ffmpeg", "-y", "-i", file_path, "-vf", f"crop={cw}:{ch}:{cx}:{cy}",
+                       "-c:a", "copy", cropped_path]
+                try:
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    width, height = self._probe_dimensions(cropped_path) or (cw, ch)
+                    working_path = cropped_path
+                except subprocess.CalledProcessError as e:
+                    print(f"Crop attempt failed: {e.stderr}; falling back to pad.")
+
+        if height >= width:
+            if working_path != file_path:
+                os.remove(file_path)
+            return working_path
+
+        # Genuine landscape footage after crop attempt - pad into a vertical canvas
+        padded_path = file_path.replace(".mp4", "_padded.mp4")
+        vf = "scale=1080:-2,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:black"
+        cmd = ["ffmpeg", "-y", "-i", working_path, "-vf", vf, "-c:a", "copy", padded_path]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            os.remove(working_path)
+            return padded_path
+        except subprocess.CalledProcessError as e:
+            print(f"Padding to vertical canvas failed: {e.stderr}; uploading original file as-is.")
+            return working_path
 
     def has_audio_stream(self, file_path: str) -> bool:
         if not shutil.which("ffprobe"):
