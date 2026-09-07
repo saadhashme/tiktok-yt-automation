@@ -59,7 +59,7 @@ class ChannelRunner:
         if self.dry_run:
             msg = f"[DRY RUN] Would download video {selected_id} ('{title}') and upload to YouTube channel {self.config.get('youtube_channel_name')}."
             print(msg)
-            self.db.record_run(slot, "success", msg)
+            self.db.record_run(slot, "dry_run", msg)
             self.notifier.send_notification("Dry Run Succeeded", msg, color=0x2ecc71)
             return
 
