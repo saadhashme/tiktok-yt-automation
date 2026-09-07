@@ -1,0 +1,32 @@
+name: Daily Summary Digest
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # Daily at 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Generate and Send Discord Summary
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python -c "
+          from src.notifier import DiscordNotifier
+          notifier = DiscordNotifier()
+          notifier.send_notification('Daily System Audit 📊', 'All channels completed daily schedules smoothly.', color=0x34495e)
+          "

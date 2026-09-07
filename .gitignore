@@ -1,0 +1,18 @@
+# Credentials & Secrets (Security Critical)
+credentials/
+tokens/
+cookies.txt
+.env
+
+# Downloads & Runtime Logs
+downloads/
+logs/
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env/

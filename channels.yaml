@@ -1,0 +1,130 @@
+channels:
+  - id: channel_1
+    tiktok_username: "truthdaddy"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "14:00"
+    slot2_time_utc: "22:00"
+
+  - id: channel_2
+    tiktok_username: "voxcortexofficial"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "14:15"
+    slot2_time_utc: "22:15"
+
+  - id: channel_3
+    tiktok_username: "ethancshow"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "14:30"
+    slot2_time_utc: "22:30"
+
+  - id: channel_4
+    tiktok_username: "datingadvicex"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "14:45"
+    slot2_time_utc: "22:45"
+
+  - id: channel_5
+    tiktok_username: "taylor_cruz_podcast"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "15:00"
+    slot2_time_utc: "23:00"
+
+  - id: channel_6
+    tiktok_username: "gooodthings2"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "15:15"
+    slot2_time_utc: "23:15"
+
+  - id: channel_7
+    tiktok_username: "mindfuldating0"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "15:30"
+    slot2_time_utc: "23:30"
+
+  - id: channel_8
+    tiktok_username: "inspiring.moments8"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "15:45"
+    slot2_time_utc: "23:45"
+
+  - id: channel_9
+    tiktok_username: "jax_motivation"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "16:00"
+    slot2_time_utc: "00:00"
+
+  - id: channel_10
+    tiktok_username: "wiseminute4"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "16:15"
+    slot2_time_utc: "00:15"
+
+  - id: channel_11
+    tiktok_username: "mindd_voice"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "16:30"
+    slot2_time_utc: "00:30"
+
+  - id: channel_12
+    tiktok_username: "steve_ralph_official"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "16:45"
+    slot2_time_utc: "00:45"
+
+  - id: channel_13
+    tiktok_username: "josh_hill_podcast"
+    youtube_channel_name: "TanPodcastStudio"
+    owner_email: "mutedcriesai@gmail.com"
+    videos_per_day: 2
+    upload_mode: "popular_split"
+    publish_timezone: "America/New_York"
+    slot1_time_utc: "17:00"
+    slot2_time_utc: "01:00"

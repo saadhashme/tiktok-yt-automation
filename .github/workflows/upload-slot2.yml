@@ -1,0 +1,81 @@
+name: Upload Slot 2
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Channel ID (e.g. channel_1)'
+        required: true
+        default: 'channel_1'
+      dry_run:
+        description: 'Perform dry run without uploading'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: upload-${{ inputs.channel || 'channel_1' }}
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Restore credentials & cookies from secrets
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TIKTOK_COOKIES: ${{ secrets.TIKTOK_COOKIES }}
+          CHANNEL_CLIENT_SECRET: ${{ secrets.CHANNEL_1_CLIENT_SECRET }}
+          CHANNEL_TOKEN: ${{ secrets.CHANNEL_1_TOKEN }}
+        run: |
+          mkdir -p credentials tokens
+          if [ -n "$TIKTOK_COOKIES" ]; then
+            echo "$TIKTOK_COOKIES" | base64 -d > cookies.txt
+          fi
+          if [ -n "$CHANNEL_CLIENT_SECRET" ]; then
+            echo "$CHANNEL_CLIENT_SECRET" | base64 -d > credentials/client_secret_channel_1.json
+          fi
+          if [ -n "$CHANNEL_TOKEN" ]; then
+            echo "$CHANNEL_TOKEN" | base64 -d > tokens/channel_1_token.json
+          fi
+
+      - name: Execute Slot 2 Upload
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          CH="${{ inputs.channel || 'channel_1' }}"
+          DRY_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_FLAG="--dry-run"
+          fi
+          python run.py --slot 2 --channel $CH $DRY_FLAG
+
+      - name: Commit SQLite DB state back to repo
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add data/
+          git commit -m "Auto-commit DB state after Slot 2" || echo "No DB changes to commit"
+          git pull --rebase origin main || true
+          git push origin main || true
+
+      - name: Upload logs artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-slot2
+          path: logs/
+          retention-days: 14
