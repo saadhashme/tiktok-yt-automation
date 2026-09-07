@@ -1,14 +1,4 @@
 channels:
-  - id: channel_1
-    tiktok_username: "truthdaddy"
-    youtube_channel_name: "TanPodcastStudio"
-    owner_email: "mutedcriesai@gmail.com"
-    videos_per_day: 2
-    upload_mode: "popular_split"
-    publish_timezone: "America/New_York"
-    slot1_time_utc: "14:00"
-    slot2_time_utc: "22:00"
-
   - id: channel_2
     tiktok_username: "voxcortexofficial"
     youtube_channel_name: "TanPodcastStudio"
