@@ -5,11 +5,14 @@ import subprocess
 import shutil
 from typing import List, Dict, Any, Optional
 
+from src.audio_processor import AudioProcessor
+
 class TikTokDownloader:
     def __init__(self, cookies_file: Optional[str] = "cookies.txt", downloads_dir: str = "./downloads"):
         self.cookies_file = cookies_file
         self.downloads_dir = downloads_dir
         os.makedirs(self.downloads_dir, exist_ok=True)
+        self.audio_processor = AudioProcessor()
 
     def list_user_videos(self, username: str, limit: int = 150) -> List[Dict[str, Any]]:
         clean_handle = username.lstrip("@")
@@ -88,6 +91,7 @@ class TikTokDownloader:
                 print(f"Audio fallback download attempt skipped: {e}")
 
         output_path = self.normalize_for_shorts(output_path)
+        output_path = self.audio_processor.replace_background_music(output_path)
 
         return output_path
 
@@ -164,17 +168,35 @@ class TikTokDownloader:
                 os.remove(file_path)
             return working_path
 
-        # Genuine landscape footage after crop attempt - pad into a vertical canvas
+        # Genuine landscape footage after crop attempt - fill the vertical
+        # canvas with a blurred, zoomed copy of the same video behind the
+        # full, uncropped original (Reels/Shorts-style blur-fill) instead of
+        # plain black bars, so the whole original frame stays visible.
         padded_path = file_path.replace(".mp4", "_padded.mp4")
-        vf = "scale=1080:-2,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:black"
-        cmd = ["ffmpeg", "-y", "-i", working_path, "-vf", vf, "-c:a", "copy", padded_path]
+        filter_complex = (
+            "[0:v]split=2[bgsrc][fgsrc];"
+            "[bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920,gblur=sigma=20[bg];"
+            "[fgsrc]scale=1080:-2[fg];"
+            "[bg][fg]overlay=(W-w)/2:(H-h)/2[outv]"
+        )
+        cmd = ["ffmpeg", "-y", "-i", working_path, "-filter_complex", filter_complex,
+               "-map", "[outv]", "-map", "0:a?", "-c:a", "copy", padded_path]
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
             os.remove(working_path)
             return padded_path
         except subprocess.CalledProcessError as e:
-            print(f"Padding to vertical canvas failed: {e.stderr}; uploading original file as-is.")
-            return working_path
+            print(f"Blur-fill to vertical canvas failed: {e.stderr}; falling back to letterbox pad.")
+            vf = "scale=1080:-2,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:black"
+            fallback_cmd = ["ffmpeg", "-y", "-i", working_path, "-vf", vf, "-c:a", "copy", padded_path]
+            try:
+                subprocess.run(fallback_cmd, check=True, capture_output=True, text=True)
+                os.remove(working_path)
+                return padded_path
+            except subprocess.CalledProcessError as e2:
+                print(f"Fallback letterbox padding also failed: {e2.stderr}; uploading original file as-is.")
+                return working_path
 
     def has_audio_stream(self, file_path: str) -> bool:
         if not shutil.which("ffprobe"):
