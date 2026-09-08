@@ -1,0 +1,183 @@
+import os
+import glob
+import shutil
+import subprocess
+from typing import Optional
+
+
+class AudioProcessor:
+    """Strips the TikTok source video's original background music (a common
+    cause of YouTube Content ID copyright claims/blocks) while preserving the
+    speaker's voice, then lays a fixed, owned background track underneath at
+    a low, unobtrusive volume for the full length of the clip.
+
+    Voice isolation is done with Demucs (AI source separation). If Demucs is
+    unavailable or fails for any reason, this falls back to keeping the
+    original audio (so the upload is never blocked by an audio processing
+    failure) rather than raising.
+    """
+
+    DEFAULT_MUSIC_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "assets", "background_music.mp3",
+    )
+    MUSIC_VOLUME = 0.16  # background music level once mixed under the voice
+    DEMUCS_TIMEOUT_SECONDS = 280
+
+    def __init__(self, music_path: Optional[str] = None):
+        self.music_path = music_path or self.DEFAULT_MUSIC_PATH
+
+    def _get_duration(self, file_path: str) -> float:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            file_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return float(result.stdout.strip())
+        except Exception as e:
+            print(f"ffprobe duration check failed: {e}")
+            return 0.0
+
+    def _isolate_vocals(self, audio_path: str, workdir: str) -> Optional[str]:
+        """Runs Demucs two-stem separation and returns the path to the
+        isolated vocals track, or None if unavailable/failed."""
+        if not shutil.which("demucs"):
+            print("demucs not installed; skipping voice isolation.")
+            return None
+
+        cmd = ["demucs", "--two-stems=vocals", "-n", "htdemucs", "-o", workdir, audio_path]
+        try:
+            subprocess.run(
+                cmd, check=True, capture_output=True, text=True,
+                timeout=self.DEMUCS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            print("Demucs voice isolation timed out; falling back to original audio.")
+            return None
+        except subprocess.CalledProcessError as e:
+            print(f"Demucs voice isolation failed: {e.stderr}; falling back to original audio.")
+            return None
+        except Exception as e:
+            print(f"Demucs voice isolation error: {e}; falling back to original audio.")
+            return None
+
+        stem = os.path.splitext(os.path.basename(audio_path))[0]
+        matches = glob.glob(os.path.join(workdir, "*", stem, "vocals.wav"))
+        if not matches:
+            print("Demucs ran but no vocals.wav output was found; falling back to original audio.")
+            return None
+        return matches[0]
+
+    def _prepare_music_bed(self, duration: float, out_path: str) -> bool:
+        """Loops/trims the fixed background track to exactly `duration`
+        seconds at a low background volume, with a short fade in/out."""
+        if not os.path.exists(self.music_path):
+            print(f"Background music file not found at {self.music_path}; skipping music bed.")
+            return False
+
+        fade_out_start = max(duration - 1, 0)
+        cmd = [
+            "ffmpeg", "-y",
+            "-stream_loop", "-1", "-i", self.music_path,
+            "-t", str(duration),
+            "-af", (
+                f"volume={self.MUSIC_VOLUME},"
+                f"afade=t=in:st=0:d=1,"
+                f"afade=t=out:st={fade_out_start}:d=1"
+            ),
+            "-ac", "2", "-ar", "44100",
+            out_path,
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Preparing background music bed failed: {e.stderr}")
+            return False
+
+    def replace_background_music(self, video_path: str) -> str:
+        """Returns a new video file with the original background music
+        removed and replaced by the fixed background track under the
+        isolated voice. Never raises: any failure along the way falls back
+        to returning the original, unmodified video so a music-processing
+        problem never blocks the upload."""
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            print("ffmpeg/ffprobe not available; skipping background music replacement.")
+            return video_path
+
+        duration = self._get_duration(video_path)
+        if duration <= 0:
+            print("Could not determine video duration; skipping background music replacement.")
+            return video_path
+
+        workdir = video_path + "_audio_work"
+        os.makedirs(workdir, exist_ok=True)
+        extracted_audio = os.path.join(workdir, "original_audio.wav")
+        music_bed = os.path.join(workdir, "music_bed.wav")
+        mixed_audio = os.path.join(workdir, "mixed_audio.wav")
+        output_path = video_path.replace(".mp4", "_remixed.mp4")
+
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "pcm_s16le",
+                 "-ar", "44100", "-ac", "2", extracted_audio],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"Extracting original audio failed: {e.stderr}; skipping background music replacement.")
+            shutil.rmtree(workdir, ignore_errors=True)
+            return video_path
+
+        has_music_bed = self._prepare_music_bed(duration, music_bed)
+        vocals_path = self._isolate_vocals(extracted_audio, workdir)
+
+        try:
+            if vocals_path and has_music_bed:
+                # Best case: original background music fully removed, only
+                # the isolated voice remains, with our music mixed underneath.
+                print("Voice isolated successfully; mixing with replacement background music.")
+                filter_complex = (
+                    "[0:a]volume=1.0[voice];"
+                    "[1:a]volume=1.0[music];"
+                    "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                )
+                cmd = ["ffmpeg", "-y", "-i", vocals_path, "-i", music_bed,
+                       "-filter_complex", filter_complex, "-map", "[aout]", mixed_audio]
+            elif has_music_bed:
+                # Voice isolation unavailable/failed: keep the original audio
+                # (still carries the copyrighted music) but flag it loudly so
+                # it's easy to spot in the run log, and still add our track.
+                print("WARNING: voice isolation unavailable this run; original background music "
+                      "was NOT removed (copyright risk remains). Falling back to layering the "
+                      "replacement music under the untouched original audio.")
+                filter_complex = (
+                    "[0:a]volume=1.0[orig];"
+                    "[1:a]volume=1.0[music];"
+                    "[orig][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                )
+                cmd = ["ffmpeg", "-y", "-i", extracted_audio, "-i", music_bed,
+                       "-filter_complex", filter_complex, "-map", "[aout]", mixed_audio]
+            else:
+                print("No usable background music bed; leaving original audio untouched.")
+                shutil.rmtree(workdir, ignore_errors=True)
+                return video_path
+
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", video_path, "-i", mixed_audio,
+                 "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+                 "-shortest", output_path],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"Background music replacement failed: {e.stderr}; uploading with original audio.")
+            shutil.rmtree(workdir, ignore_errors=True)
+            return video_path
+
+        shutil.rmtree(workdir, ignore_errors=True)
+        os.remove(video_path)
+        return output_path
