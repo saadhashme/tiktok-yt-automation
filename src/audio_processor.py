@@ -5,6 +5,28 @@ import subprocess
 from typing import Optional
 
 
+def _find_default_music_path() -> str:
+    """Locates the bundled background-music asset regardless of filename
+    case. GitHub's web upload UI can keep an uppercase extension (e.g.
+    background_music.MP3), and Linux filesystems (GitHub Actions runners)
+    are case-sensitive, so a hardcoded lowercase '.mp3' path can silently
+    miss the file. This scans the assets directory for anything named
+    'background_music.*' and falls back to the lowercase default path if
+    nothing is found (so a clear "file not found" message is still logged
+    instead of a mismatch nobody notices)."""
+    assets_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets"
+    )
+    fallback = os.path.join(assets_dir, "background_music.mp3")
+    try:
+        for name in os.listdir(assets_dir):
+            if name.lower().startswith("background_music."):
+                return os.path.join(assets_dir, name)
+    except OSError:
+        pass
+    return fallback
+
+
 class AudioProcessor:
     """Strips the TikTok source video's original background music (a common
     cause of YouTube Content ID copyright claims/blocks) while preserving the
@@ -17,11 +39,12 @@ class AudioProcessor:
     failure) rather than raising.
     """
 
-    DEFAULT_MUSIC_PATH = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "assets", "background_music.mp3",
-    )
-    MUSIC_VOLUME = 0.16  # background music level once mixed under the voice
+    DEFAULT_MUSIC_PATH = _find_default_music_path()
+    # The bundled track is already pre-edited/mixed at a low background
+    # level, so it is looped/trimmed/faded as-is with no extra attenuation
+    # here (a second volume cut on top of an already-quiet source would
+    # make it too faint under the voice).
+    MUSIC_VOLUME = 1.0
     DEMUCS_TIMEOUT_SECONDS = 280
 
     def __init__(self, music_path: Optional[str] = None):
