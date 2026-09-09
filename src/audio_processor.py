@@ -2,7 +2,15 @@ import os
 import glob
 import shutil
 import subprocess
+import wave
 from typing import Optional
+
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - numpy is installed by the workflow,
+    # but this module must not crash on import if it's ever missing (e.g. a
+    # local run outside the CI environment); the quality check is skipped.
+    np = None
 
 
 def _find_default_music_path() -> str:
@@ -94,6 +102,63 @@ class AudioProcessor:
             return None
         return matches[0]
 
+    def _measure_isolation_quality(self, vocals_path: str) -> Optional[float]:
+        """Objective sanity check on how clean the Demucs vocal isolation
+        actually is. Demucs completing without an error only means the
+        pipeline ran, not that the original background music is genuinely
+        gone -- AI source separation on short, compressed, music-forward
+        clips can leave the music audibly bleeding through the 'vocals'
+        stem. Real speech naturally has quiet gaps (breaths, pauses between
+        phrases); continuous background music does not. This measures the
+        fraction of short windows in the isolated track that are
+        near-silent relative to its own peak level. A low fraction is a
+        signal that background music likely survived the separation, even
+        though nothing failed or logged an error. This is a heuristic, not
+        a certainty -- it exists so a "succeeded" log line is never trusted
+        as proof the audio is actually clean.
+        """
+        if np is None:
+            print("Audio QC: numpy unavailable; skipping isolation quality check.")
+            return None
+        try:
+            with wave.open(vocals_path, "rb") as wf:
+                n_channels = wf.getnchannels()
+                sample_width = wf.getsampwidth()
+                frame_rate = wf.getframerate()
+                raw = wf.readframes(wf.getnframes())
+        except Exception as e:
+            print(f"Audio QC: could not read {vocals_path} for quality check: {e}")
+            return None
+
+        if sample_width != 2:
+            print("Audio QC: unexpected sample width; skipping quality check.")
+            return None
+
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+        if n_channels > 1:
+            samples = samples.reshape(-1, n_channels)[:, 0]
+
+        window = max(1, int(frame_rate * 0.05))  # 50ms windows
+        n_windows = len(samples) // window
+        if n_windows < 2:
+            print("Audio QC: clip too short for a meaningful quality check.")
+            return None
+
+        trimmed = samples[: n_windows * window].reshape(n_windows, window)
+        rms = np.sqrt(np.mean(trimmed.astype(np.float64) ** 2, axis=1))
+        peak = max(1.0, float(np.max(np.abs(samples))))
+        threshold = peak * 0.01  # roughly -40 dBFS relative to this track's own peak
+        silent_ratio = float(np.mean(rms < threshold))
+
+        verdict = "looks clean" if silent_ratio >= 0.15 else "WARNING: likely still has original music bleeding through"
+        print(
+            f"Audio QC: {silent_ratio * 100:.1f}% of isolated-vocal windows are "
+            f"near-silent (~-40dBFS off this track's own peak) -> {verdict}. "
+            f"(Typical short-form speech has noticeable quiet gaps between "
+            f"phrases; continuous background music does not.)"
+        )
+        return silent_ratio
+
     def _prepare_music_bed(self, duration: float, out_path: str) -> bool:
         """Loops/trims the fixed background track to exactly `duration`
         seconds at a low background volume, with a short fade in/out."""
@@ -162,6 +227,7 @@ class AudioProcessor:
                 # Best case: original background music fully removed, only
                 # the isolated voice remains, with our music mixed underneath.
                 print("Voice isolated successfully; mixing with replacement background music.")
+                self._measure_isolation_quality(vocals_path)
                 filter_complex = (
                     "[0:a]volume=1.0[voice];"
                     "[1:a]volume=1.0[music];"
