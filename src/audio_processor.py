@@ -54,6 +54,10 @@ class AudioProcessor:
     # make it too faint under the voice).
     MUSIC_VOLUME = 1.0
     DEMUCS_TIMEOUT_SECONDS = 280
+    # Minimum fraction of near-silent windows an isolated-vocals track must
+    # show to be trusted as genuinely free of the original background music.
+    # Below this, the caller should NOT treat the audio as copyright-safe.
+    MIN_CLEAN_SILENT_RATIO = 0.15
 
     def __init__(self, music_path: Optional[str] = None):
         self.music_path = music_path or self.DEFAULT_MUSIC_PATH
@@ -150,7 +154,7 @@ class AudioProcessor:
         threshold = peak * 0.01  # roughly -40 dBFS relative to this track's own peak
         silent_ratio = float(np.mean(rms < threshold))
 
-        verdict = "looks clean" if silent_ratio >= 0.15 else "WARNING: likely still has original music bleeding through"
+        verdict = "looks clean" if silent_ratio >= self.MIN_CLEAN_SILENT_RATIO else "WARNING: likely still has original music bleeding through"
         print(
             f"Audio QC: {silent_ratio * 100:.1f}% of isolated-vocal windows are "
             f"near-silent (~-40dBFS off this track's own peak) -> {verdict}. "
@@ -158,6 +162,25 @@ class AudioProcessor:
             f"phrases; continuous background music does not.)"
         )
         return silent_ratio
+
+    def _apply_noise_gate(self, vocals_path: str, out_path: str) -> bool:
+        """Applies a noise gate to the isolated vocals track to suppress
+        low-level residual background-music bleed-through in the quiet gaps
+        between phrases (Demucs separation is not always perfectly clean).
+        Attenuates rather than hard-mutes quiet passages, so soft speech
+        isn't chopped off. Returns False (caller keeps the ungated track) if
+        the gate step itself fails for any reason."""
+        cmd = [
+            "ffmpeg", "-y", "-i", vocals_path,
+            "-af", "agate=threshold=0.025:ratio=9:attack=5:release=200:range=0.05",
+            out_path,
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Noise gate on isolated vocals failed: {e.stderr}; using ungated vocals.")
+            return False
 
     def _prepare_music_bed(self, duration: float, out_path: str) -> bool:
         """Loops/trims the fixed background track to exactly `duration`
@@ -186,26 +209,39 @@ class AudioProcessor:
             print(f"Preparing background music bed failed: {e.stderr}")
             return False
 
-    def replace_background_music(self, video_path: str) -> str:
-        """Returns a new video file with the original background music
-        removed and replaced by the fixed background track under the
-        isolated voice. Never raises: any failure along the way falls back
-        to returning the original, unmodified video so a music-processing
-        problem never blocks the upload."""
+    def replace_background_music(self, video_path: str) -> "tuple[str, bool]":
+        """Returns (new_video_path, is_copyright_safe).
+
+        is_copyright_safe is only True when the original background music
+        was verifiably (not just apparently) removed: Demucs separation
+        succeeded, a noise gate was applied to suppress residual bleed in
+        quiet gaps, and the objective Audio QC check confirms the result
+        actually looks like isolated speech rather than continuous
+        background audio. A "Demucs didn't error out" success message is
+        NOT enough on its own to mark a video safe -- that was verified
+        false against real uploads, where the isolation completed without
+        error but still left the original music clearly audible.
+
+        Never raises: any failure along the way falls back to returning the
+        original, unmodified video (marked not copyright-safe) so a
+        music-processing problem never crashes the run -- but the caller is
+        responsible for not treating an unsafe result as safe to publish.
+        """
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             print("ffmpeg/ffprobe not available; skipping background music replacement.")
-            return video_path
+            return video_path, False
 
         duration = self._get_duration(video_path)
         if duration <= 0:
             print("Could not determine video duration; skipping background music replacement.")
-            return video_path
+            return video_path, False
 
         workdir = video_path + "_audio_work"
         os.makedirs(workdir, exist_ok=True)
         extracted_audio = os.path.join(workdir, "original_audio.wav")
         music_bed = os.path.join(workdir, "music_bed.wav")
         mixed_audio = os.path.join(workdir, "mixed_audio.wav")
+        gated_vocals = os.path.join(workdir, "vocals_gated.wav")
         output_path = video_path.replace(".mp4", "_remixed.mp4")
 
         try:
@@ -217,23 +253,36 @@ class AudioProcessor:
         except subprocess.CalledProcessError as e:
             print(f"Extracting original audio failed: {e.stderr}; skipping background music replacement.")
             shutil.rmtree(workdir, ignore_errors=True)
-            return video_path
+            return video_path, False
 
         has_music_bed = self._prepare_music_bed(duration, music_bed)
         vocals_path = self._isolate_vocals(extracted_audio, workdir)
+        is_clean = False
 
         try:
             if vocals_path and has_music_bed:
-                # Best case: original background music fully removed, only
-                # the isolated voice remains, with our music mixed underneath.
-                print("Voice isolated successfully; mixing with replacement background music.")
-                self._measure_isolation_quality(vocals_path)
+                # Gate the isolated vocals to suppress residual background
+                # music bleeding through the quiet gaps, then objectively
+                # measure whether the result actually looks clean rather
+                # than trusting that Demucs simply didn't error out.
+                gate_ok = self._apply_noise_gate(vocals_path, gated_vocals)
+                voice_for_mix = gated_vocals if gate_ok else vocals_path
+                silent_ratio = self._measure_isolation_quality(voice_for_mix)
+                is_clean = silent_ratio is not None and silent_ratio >= self.MIN_CLEAN_SILENT_RATIO
+
+                if is_clean:
+                    print("Voice isolated and verified clean; mixing with replacement background music.")
+                else:
+                    print("WARNING: isolated vocals did not pass the copyright-safety audio check "
+                          "(original background music likely still audible). This result will be "
+                          "treated as NOT copyright-safe by the caller.")
+
                 filter_complex = (
                     "[0:a]volume=1.0[voice];"
                     "[1:a]volume=1.0[music];"
                     "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
                 )
-                cmd = ["ffmpeg", "-y", "-i", vocals_path, "-i", music_bed,
+                cmd = ["ffmpeg", "-y", "-i", voice_for_mix, "-i", music_bed,
                        "-filter_complex", filter_complex, "-map", "[aout]", mixed_audio]
             elif has_music_bed:
                 # Voice isolation unavailable/failed: keep the original audio
@@ -252,7 +301,7 @@ class AudioProcessor:
             else:
                 print("No usable background music bed; leaving original audio untouched.")
                 shutil.rmtree(workdir, ignore_errors=True)
-                return video_path
+                return video_path, False
 
             subprocess.run(cmd, check=True, capture_output=True, text=True)
 
@@ -265,8 +314,8 @@ class AudioProcessor:
         except subprocess.CalledProcessError as e:
             print(f"Background music replacement failed: {e.stderr}; uploading with original audio.")
             shutil.rmtree(workdir, ignore_errors=True)
-            return video_path
+            return video_path, False
 
         shutil.rmtree(workdir, ignore_errors=True)
         os.remove(video_path)
-        return output_path
+        return output_path, is_clean
