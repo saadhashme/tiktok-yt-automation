@@ -50,7 +50,10 @@ class TikTokDownloader:
             print(f"Error fetching TikTok profile via yt-dlp: {e.stderr}")
             return []
 
-    def download_video(self, video_id: str, video_url: Optional[str] = None, username: Optional[str] = None) -> str:
+    def download_video(self, video_id: str, video_url: Optional[str] = None, username: Optional[str] = None) -> "tuple[str, bool]":
+        """Returns (video_path, audio_is_copyright_safe). See
+        AudioProcessor.replace_background_music for what "safe" means --
+        it's an objective check, not just "the pipeline didn't crash"."""
         if not video_url:
             if username:
                 clean_handle = username.lstrip("@")
@@ -91,9 +94,9 @@ class TikTokDownloader:
                 print(f"Audio fallback download attempt skipped: {e}")
 
         output_path = self.normalize_for_shorts(output_path)
-        output_path = self.audio_processor.replace_background_music(output_path)
+        output_path, audio_clean = self.audio_processor.replace_background_music(output_path)
 
-        return output_path
+        return output_path, audio_clean
 
     def _probe_dimensions(self, file_path: str) -> Optional[tuple]:
         cmd = [
